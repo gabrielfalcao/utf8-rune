@@ -1,20 +1,49 @@
 use std::fmt::{Debug, Display, Formatter};
+use std::marker::PhantomData;
+use std::ops::Deref;
 
 use crate::{
-    get_rune_cutoff_at_index,
-    slice_ptr_and_length_from_display, unwrap_indent, Result,
-    Rune,
+    get_rune_cutoff_at_index, get_valid_utf8_str_of, slice_ptr_and_length_from_display,
+    unwrap_indent, Result, Rune,
 };
 
+/// Represents a slice of bytes which can be automatically parsed into
+/// a sequence of [Rune(s)](crate::Rune)
+///
+/// Example
+///
+///```
+/// use utf8_rune::{Runes};
+/// let parts = Runes::new("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹");
+/// assert_eq!(
+///     parts
+///         .runes().unwrap_or_default()
+///         .iter()
+///         .map(|rune| rune.to_string())
+///         .collect::<Vec<String>>(),
+///     vec![
+///         "👩🏻‍🚒",
+///         "👌🏿",
+///         "🧑🏽‍🚒",
+///         "👨‍🚒",
+///         "🌶️",
+///         "🎹",
+///         "💔",
+///         "🔥",
+///         "❤️‍🔥",
+///         "❤️‍🩹",
+///     ]
+/// );
+///```
 #[derive(Clone)]
-pub struct Runes {
-    pub ptr: *const u8,
-    pub indexes: Vec<usize>,
-    pub length: usize,
+pub struct Runes<'g> {
+    pub(crate) ptr: *const u8,
+    pub(crate) indexes: Vec<usize>,
+    pub(crate) length: usize,
+    pub(crate) _marker: PhantomData<&'g usize>,
 }
-// TODO: Deref &[&str]
-impl Runes {
-    pub fn new<T: Display>(input: T) -> Runes {
+impl<'g> Runes<'g> {
+    pub fn new<T: Display>(input: T) -> Runes<'g> {
         let input = input.to_string();
         let (ptr, length) = slice_ptr_and_length_from_display(&input);
         let mut cutoff: usize = 0;
@@ -33,6 +62,7 @@ impl Runes {
             ptr,
             indexes,
             length,
+            _marker: PhantomData,
         }
     }
 
@@ -40,7 +70,7 @@ impl Runes {
         self.indexes.len()
     }
 
-    pub fn as_str<'g>(&self) -> &'g str {
+    pub fn as_str(&self) -> &'g str {
         let mut offset = self.length;
         loop {
             if let Ok(slice) = std::str::from_utf8(unsafe {
@@ -56,7 +86,7 @@ impl Runes {
         }
     }
 
-    pub fn as_bytes<'g>(&self) -> &'g [u8] {
+    pub fn as_bytes(&self) -> &'g [u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 
@@ -81,46 +111,77 @@ impl Runes {
     }
 
     pub fn indexes(&self) -> Vec<usize> {
-        self.indexes.clone()
+        let mut indexes = self.indexes.clone();
+        if indexes.len() > 0 {
+            indexes.pop();
+        }
+        indexes
+    }
+
+    pub fn slice_indexes(&self) -> Vec<(usize, usize)> {
+        self.indexes()
+            .into_iter()
+            .map(|index| {
+                let next = get_rune_cutoff_at_index(self.ptr, self.length, index)
+                    .unwrap_or_default();
+                let length = if next >= index {
+                    next - index
+                } else {
+                    0
+                };
+                (index, length)
+            })
+            .filter(|(_, length)| *length > 0)
+            .collect()
     }
 
     pub fn runes(&self) -> Result<Vec<Rune>> {
         let mut runes = Vec::<Rune>::new();
-        let mut indexes = self.indexes();
-        if indexes.len() > 0 {
-            indexes.pop();
-        }
-        for cutoff in indexes.into_iter() {
+        for cutoff in self.indexes().into_iter() {
             runes.push(Rune::from_ptr_cutoff(self.ptr, self.length, cutoff)?);
         }
         Ok(runes)
     }
 }
-impl From<&str> for Runes {
-    fn from(s: &str) -> Runes {
+impl<'g> From<&str> for Runes<'g> {
+    fn from(s: &str) -> Runes<'g> {
         Runes::new(s)
     }
 }
 
-impl From<String> for Runes {
-    fn from(s: String) -> Runes {
+impl<'g> From<String> for Runes<'g> {
+    fn from(s: String) -> Runes<'g> {
         Runes::new(s)
     }
 }
 
-impl From<&String> for Runes {
-    fn from(s: &String) -> Runes {
+impl<'g> From<&String> for Runes<'g> {
+    fn from(s: &String) -> Runes<'g> {
         Runes::new(s)
     }
 }
 
-impl Display for Runes {
+impl<'g> Display for Runes<'g> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
-impl Debug for Runes {
+impl<'g> Debug for Runes<'g> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}", self.as_debug(None))
+    }
+}
+impl<'g> Deref for Runes<'g> {
+    type Target = [&'g str];
+
+    fn deref(&self) -> &[&'g str] {
+        let runes = self
+            .slice_indexes()
+            .into_iter()
+            .map(|(index, count)| get_valid_utf8_str_of(self.ptr, index, count))
+            .filter(|c| c.is_some())
+            .map(|c| c.unwrap())
+            .collect::<Vec<&'g str>>();
+        unsafe { std::mem::transmute::<&[&str], &'g [&'g str]>(&runes) }
     }
 }

@@ -9,10 +9,30 @@ use crate::{
     unwrap_indent, Result, DEFAULT_INDENT,
 };
 
+/// A Rune represents a single visible UTF-8 character. To handle contiguous bytes as multiple runes consider using [Runes](crate::Runes)
+///
+/// Examples
+///
+///```
+/// use utf8_rune::Rune;
+/// let rune = Rune::new("❤️");
+/// assert_eq!(rune.len(), 6);
+/// assert_eq!(rune.as_str(), "❤️");
+/// assert_eq!(rune.as_bytes(), "❤️".as_bytes());
+///```
+///
+///```
+/// use utf8_rune::Rune;
+/// let rune = Rune::new("👌🏽");
+/// assert_eq!(rune.len(), 8);
+/// assert_eq!(rune.as_str(), "👌🏽");
+/// assert_eq!(rune.as_bytes(), "👌🏽".as_bytes());
+///```
+
 #[derive(Clone, Copy)]
 pub struct Rune {
-    pub ptr: *const u8,
-    pub length: usize,
+    pub(crate) ptr: *const u8,
+    pub(crate) length: usize,
 }
 
 impl Default for Rune {

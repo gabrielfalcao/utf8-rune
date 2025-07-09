@@ -39,37 +39,3 @@ debug = []
 name = "utf8_rune"
 path = "./src/lib.rs"
 test = false
-
-
-
-[[test]]
-name = "test_previous_valid_cutoff"
-path = "tests/test_previous_valid_cuttoff.rs"
-
-[[test]]
-name = "test_next_valid_cutoff"
-path = "tests/test_next_valid_cuttoff.rs"
-
-[[test]]
-name = "test_get_rune_cutoff_at_index"
-path = "tests/test_get_rune_cutoff_at_index.rs"
-
-[[test]]
-name = "test_byte_type"
-path = "tests/test_byte_type.rs"
-
-[[test]]
-name = "test_parts"
-path = "tests/test_parts.rs"
-
-[[test]]
-name = "test_rune"
-path = "tests/test_rune.rs"
-
-[[test]]
-name = "test_split_at_first_rune"
-path = "tests/test_split_at_first_rune.rs"
-
-[[test]]
-name = "test_runes"
-path = "tests/test_runes.rs"

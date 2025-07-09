@@ -101,9 +101,21 @@ pub fn get_byte_slice_of<'g>(ptr: *const u8, index: usize, count: usize) -> &'g 
     bytes
 }
 #[inline]
-pub fn is_valid_utf8_str_of<'g>(ptr: *const u8, index: usize, count: usize) -> bool {
+pub fn get_valid_utf8_str_of<'g>(
+    ptr: *const u8,
+    index: usize,
+    count: usize,
+) -> Option<&'g str> {
     let slice = get_byte_slice_of(ptr, index, count).to_vec();
-    std::str::from_utf8(&slice).is_ok()
+    match std::str::from_utf8(&slice) {
+        Ok(c) =>
+            Some(unsafe { std::mem::transmute::<&str, &'g str>(c) }),
+        Err(_e_) => None,
+    }
+}
+#[inline]
+pub fn is_valid_utf8_str_of<'g>(ptr: *const u8, index: usize, count: usize) -> bool {
+    get_valid_utf8_str_of(ptr, index, count).is_some()
 }
 
 #[cfg(feature = "debug")]
