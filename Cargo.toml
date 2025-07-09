@@ -1,0 +1,75 @@
+[package]
+name = "utf8-rune"
+version = "0.0.0"
+edition = "2024"
+
+description = """Lightweight crate that aims at being a building block
+for libraries that work with UTF-8 data.
+
+This crate provides the struct Rune which can thought of in some cases
+as a drop-in replacement to Rust's char type.
+
+This crate also provides a few low-level tools to work with raw
+pointers of bytes and work with a sequence of bytes to produce valid
+UTF-8 data.
+
+The idea of Rune both borrows from and expands Golang's notion of rune
+such that rather than representing one 32 bits integer, each
+`utf8_rune::Rune` represents a set of bytes that, when displayed
+together represent a single visible UTF-8 character.
+"""
+
+documentation = "https://docs.rs/utf8-rune"
+readme = "README.md"
+homepage = "https://github.com/gabrielfalcao/utf8-rune"
+license = "MIT"
+keywords = ["utf8", "unicode", "streamer"]
+authors = ["Gabriel DeMoura <gabrielteratos@gmail.com>"]
+categories = ["internationalization", "localization", "parsing"]
+# autotests = false
+
+[dev-dependencies]
+debug-et-diagnostics = { version = "0.1.2" }
+
+
+[features]
+debug = []
+
+[lib]
+name = "utf8_rune"
+path = "./src/lib.rs"
+test = false
+
+
+
+[[test]]
+name = "test_previous_valid_cutoff"
+path = "tests/test_previous_valid_cuttoff.rs"
+
+[[test]]
+name = "test_next_valid_cutoff"
+path = "tests/test_next_valid_cuttoff.rs"
+
+[[test]]
+name = "test_get_rune_cutoff_at_index"
+path = "tests/test_get_rune_cutoff_at_index.rs"
+
+[[test]]
+name = "test_byte_type"
+path = "tests/test_byte_type.rs"
+
+[[test]]
+name = "test_parts"
+path = "tests/test_parts.rs"
+
+[[test]]
+name = "test_rune"
+path = "tests/test_rune.rs"
+
+[[test]]
+name = "test_split_at_first_rune"
+path = "tests/test_split_at_first_rune.rs"
+
+[[test]]
+name = "test_runes"
+path = "tests/test_runes.rs"
