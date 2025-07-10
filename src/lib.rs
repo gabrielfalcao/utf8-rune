@@ -14,13 +14,22 @@ pub mod runes;
 #[doc(inline)]
 pub use runes::Runes;
 
-pub mod internal;
-pub(crate) use internal::{
-    continuation_bytes_location, copy_ptr, dealloc_ptr, display_error, format_bytes,
-    get_byte_at_index, get_byte_slice_of, get_valid_utf8_str_of, is_valid_utf8_str_of,
-    new_ptr, slice_ptr_and_length_from_bytes, slice_ptr_and_length_from_display,
-    unwrap_indent, DEFAULT_INDENT,
+pub mod pointer;
+
+#[cfg(feature = "pointer")]
+pub use pointer::{
+    copy, create, destroy, from_display, from_slice, get_byte_at_index,
+    get_byte_slice_of, get_valid_utf8_str_of, is_valid_utf8_str_of,
 };
+#[cfg(not(feature = "pointer"))]
+#[allow(unused_imports)]
+pub(crate) use pointer::{
+    copy, create, destroy, from_display, from_slice, get_byte_at_index,
+    get_byte_slice_of, get_valid_utf8_str_of, is_valid_utf8_str_of,
+};
+
+pub mod internal;
+pub(crate) use internal::{display_error, format_bytes, unwrap_indent, DEFAULT_INDENT};
 
 pub mod parts;
 #[doc(inline)]
@@ -29,6 +38,12 @@ pub use parts::RuneParts;
 pub mod heuristic;
 #[doc(inline)]
 pub use heuristic::{
-    get_rune_cutoff_at_index, next_valid_cutoff, previous_valid_cutoff,
-    split_at_first_rune, unexpected_continuation_byte_at_index_error,
+    continuation_bytes_location, get_rune_cutoff_at_index, next_valid_cutoff,
+    previous_valid_cutoff, split_at_first_rune,
 };
+
+pub mod mem;
+#[cfg(not(feature = "pointer"))]
+pub(crate) use mem::layout;
+#[cfg(feature = "pointer")]
+pub use mem::{layout, MemoryError};

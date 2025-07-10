@@ -1,19 +1,38 @@
-use crate::{
-    continuation_bytes_location, copy_ptr, get_byte_at_index, get_byte_slice_of,
-    is_valid_utf8_str_of, ByteType, Error, Result,
+//! heuristic functions to find UTF-8 "[runes](crate::Rune)" within raw [u8] pointers
+use crate::pointer::{
+    self, get_byte_at_index, get_byte_slice_of, is_valid_utf8_str_of,
 };
-#[inline]
-pub fn split_at_first_rune<'g>(ptr: *const u8, length: usize) -> usize {
-    get_rune_cutoff_at_index(ptr, length, 0).expect("should not fail at index 0")
-}
+use crate::{ByteType, Error, Result};
 
+/// heuristic function that determines the cutoff index at which a
+/// "[rune](crate::Rune)" ends after the given index.
+///
+/// Example
+///
+/// > Note: `utf8_rune::mem` requires the `mem` feature.
+///
+/// ```
+/// use utf8_rune::pointer::{self, get_byte_slice_of};
+/// use utf8_rune::{get_rune_cutoff_at_index, Result};
+///
+/// let bytes = "👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹".as_bytes();
+/// let length = bytes.len();
+/// let ptr = bytes.as_ptr();
+///
+/// let index = 56;
+/// let cutoff = get_rune_cutoff_at_index(ptr, length, index).unwrap();
+/// let count = cutoff - index;
+/// let slice = get_byte_slice_of(ptr, index, count);
+/// assert_eq!(slice, "🎹".as_bytes());
+/// ```
+///
 #[inline]
 pub fn get_rune_cutoff_at_index<'g>(
     ptr: *const u8,
     length: usize,
     index: usize,
 ) -> Result<usize> {
-    let ptr = copy_ptr(ptr, length);
+    let ptr = pointer::copy(ptr, length)?;
 
     if index > length {
         return Err(Error::InvalidIndex(index, get_byte_slice_of(ptr, 0, length)));
@@ -100,17 +119,49 @@ pub fn get_rune_cutoff_at_index<'g>(
     }
     return Ok(cutoff);
 }
+#[inline]
+pub fn split_at_first_rune<'g>(ptr: *const u8, length: usize) -> usize {
+    get_rune_cutoff_at_index(ptr, length, 0).expect("should not fail at index 0")
+}
 
-pub fn unexpected_continuation_byte_at_index_error<'e>(
+#[inline]
+pub fn continuation_bytes_location<'g>(
     ptr: *const u8,
     length: usize,
     index: usize,
-) -> Error<'e> {
-    let byte = get_byte_at_index(ptr, index);
-    let previous_index = previous_valid_cutoff(ptr, length, index);
-    let next_index = next_valid_cutoff(ptr, length, index);
-    let slice = get_byte_slice_of(ptr, index, length);
-    Error::UnexpectedContinuationByte(byte, index, previous_index, next_index, slice)
+) -> Option<(usize, ByteType)> {
+    let shift: usize = (0xE2u8.leading_ones() & 0xEFu8.leading_ones()) as usize;
+    if index + (shift - 1) < length {
+        let zwj0 = get_byte_at_index(ptr, index);
+        let zwj1 = get_byte_at_index(ptr, index + 1);
+        let zwj2 = get_byte_at_index(ptr, index + 2);
+        let next_rune_byte = get_byte_at_index(ptr, index + shift);
+        let ty = if index + shift < length {
+            ByteType::from(next_rune_byte)
+        } else {
+            ByteType::None
+        };
+        let tuple = (zwj0, zwj1, zwj2);
+        match tuple {
+            (0xE2, 0x80, 0x8D) => {
+                let count = shift + ty.len();
+                Some((count, ty))
+            },
+            (0xEF, 0xB8, 0x8F) => {
+                let mut count = 0xEFu8.leading_ones() as usize;
+                if let Some((next_count, _ty_)) =
+                    continuation_bytes_location(ptr, length, index + shift)
+                {
+                    count += next_count
+                }
+
+                Some((count, ty))
+            },
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -119,7 +170,7 @@ pub fn previous_valid_cutoff<'e>(
     length: usize,
     index: usize,
 ) -> Option<usize> {
-    let ptr = copy_ptr(ptr, length);
+    let ptr = pointer::copy(ptr, length).unwrap();
     if index == 0 && index == length {
         return None;
     }
@@ -190,7 +241,7 @@ pub fn next_valid_cutoff<'e>(
     if index >= length {
         return None;
     }
-    let ptr = copy_ptr(ptr, length);
+    let ptr = pointer::copy(ptr, length).unwrap();
     let mut next_index = index;
 
     while next_index < length {
@@ -223,14 +274,27 @@ pub fn next_valid_cutoff<'e>(
     }
 }
 
+pub(crate) fn unexpected_continuation_byte_at_index_error<'e>(
+    ptr: *const u8,
+    length: usize,
+    index: usize,
+) -> Error<'e> {
+    let byte = get_byte_at_index(ptr, index);
+    let previous_index = previous_valid_cutoff(ptr, length, index);
+    let next_index = next_valid_cutoff(ptr, length, index);
+    let slice = get_byte_slice_of(ptr, index, length);
+    Error::UnexpectedContinuationByte(byte, index, previous_index, next_index, slice)
+}
+
 #[cfg(test)]
 mod test_split_at_first_rune {
-    use crate::{slice_ptr_and_length_from_bytes, split_at_first_rune, Result};
+    use crate::pointer::{self};
+    use crate::{split_at_first_rune, Result};
 
     #[test]
     fn test_split_at_first_rune_4_bytes() -> Result<()> {
         //  "😀" => [0xf0, 0x9f, 0x98, 0x80] => [0b11110000, 0b10011111, 0b10011000, 0b10000000]
-        let (ptr, length) = slice_ptr_and_length_from_bytes("😀smiley".as_bytes());
+        let (ptr, length) = pointer::from_slice("😀smiley".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(cutoff, 4);
         assert_eq!(length, 10);
@@ -241,7 +305,7 @@ mod test_split_at_first_rune {
     #[test]
     fn test_split_at_first_rune_6_bytes() -> Result<()> {
         // "☠️" => [0xe2, 0x98, 0xa0, 0xef, 0xb8, 0x8f] => [0b11100010, 0b10011000, 0b10100000, 0b11101111, 0b10111000, 0b10001111]
-        let (ptr, length) = slice_ptr_and_length_from_bytes("☠️skull".as_bytes());
+        let (ptr, length) = pointer::from_slice("☠️skull".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(length, 11);
         assert_eq!(cutoff, 6);
@@ -251,8 +315,7 @@ mod test_split_at_first_rune {
 
     #[test]
     fn test_split_at_first_ascii() -> Result<()> {
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("abcdefghijklmnopqrstu".as_bytes());
+        let (ptr, length) = pointer::from_slice("abcdefghijklmnopqrstu".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(cutoff, 1);
         assert_eq!(length, 21);
@@ -262,7 +325,7 @@ mod test_split_at_first_rune {
 
     #[test]
     fn test_split_at_first_nonascii_single_byte_character() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("ão".as_bytes());
+        let (ptr, length) = pointer::from_slice("ão".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(cutoff, 2);
         assert_eq!(length, 3);
@@ -272,7 +335,7 @@ mod test_split_at_first_rune {
 
     #[test]
     fn test_split_at_first_rune_single_heart() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(cutoff, 6);
         assert_eq!(length, 6);
@@ -281,7 +344,7 @@ mod test_split_at_first_rune {
 
     #[test]
     fn test_split_at_first_rune_two_runes() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️🦅".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️🦅".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(cutoff, 6);
         assert_eq!(length, 10);
@@ -291,20 +354,18 @@ mod test_split_at_first_rune {
 
 #[cfg(test)]
 mod test_get_rune_cutoff_at_index {
-    use crate::{
-        get_rune_cutoff_at_index, slice_ptr_and_length_from_bytes, Result, RuneParts,
-    };
-
+    use crate::pointer::{self};
+    use crate::{assert_get_rune_cutoff_at_index, get_rune_cutoff_at_index, Result};
     #[test]
     fn test_get_rune_cutoff_at_first_index_single_rune() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 6, 0, 6, "❤️");
         Ok(())
     }
 
     #[test]
     fn test_get_rune_cutoff_empty() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("".as_bytes());
+        let (ptr, length) = pointer::from_slice("".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 0, 0, 0, "");
         Ok(())
     }
@@ -312,8 +373,7 @@ mod test_get_rune_cutoff_at_index {
     #[test]
     fn test_get_rune_cutoff_at_various_indexes_4_bytes() -> Result<()> {
         //  "😀" => [0xf0, 0x9f, 0x98, 0x80] => [0b11110000, 0b10011111, 0b10011000, 0b10000000]
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("smiley😀smiley".as_bytes());
+        let (ptr, length) = pointer::from_slice("smiley😀smiley".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 16, 6, 10, "😀");
 
         Ok(())
@@ -322,7 +382,7 @@ mod test_get_rune_cutoff_at_index {
     #[test]
     fn test_get_rune_cutoff_at_various_indexes_6_bytes() -> Result<()> {
         // "☠️" => [0xe2, 0x98, 0xa0, 0xef, 0xb8, 0x8f] => [0b11100010, 0b10011000, 0b10100000, 0b11101111, 0b10111000, 0b10001111]
-        let (ptr, length) = slice_ptr_and_length_from_bytes("skull☠️skull".as_bytes());
+        let (ptr, length) = pointer::from_slice("skull☠️skull".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 16, 5, 11, "☠️");
 
         Ok(())
@@ -330,8 +390,7 @@ mod test_get_rune_cutoff_at_index {
 
     #[test]
     fn test_get_rune_cutoff_at_various_indexes_ascii() -> Result<()> {
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("abcdefghijklmnopqrstu".as_bytes());
+        let (ptr, length) = pointer::from_slice("abcdefghijklmnopqrstu".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 21, 7, 8, "h");
 
         Ok(())
@@ -342,7 +401,7 @@ mod test_get_rune_cutoff_at_index {
         // "🦅" => length=4 => [0xf0, 0x9f, 0xa6, 0x85] => [0b11110000, 0b10011111, 0b10100110, 0b10000101] => [240, 159, 166, 133]
         // "ã" => length=2 => [0xc3, 0xa3] => [0b11000011, 0b10100011] => [195, 163]
 
-        let (ptr, length) = slice_ptr_and_length_from_bytes("falcão🦅".as_bytes());
+        let (ptr, length) = pointer::from_slice("falcão🦅".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 11, 4, 6, "ã");
         assert_get_rune_cutoff_at_index!(ptr, length, 11, 6, 7, "o");
         assert_get_rune_cutoff_at_index!(ptr, length, 11, 7, 11, "🦅");
@@ -351,7 +410,7 @@ mod test_get_rune_cutoff_at_index {
 
     #[test]
     fn test_get_rune_cutoff_at_first_index() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️🦅".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️🦅".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 10, 0, 6, "❤️");
         assert_get_rune_cutoff_at_index!(ptr, length, 10, 6, 10, "🦅");
         Ok(())
@@ -359,7 +418,7 @@ mod test_get_rune_cutoff_at_index {
 
     #[test]
     fn test_get_rune_cutoff_unexpected_continuation_byte() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️🦅".as_bytes());
+        let (ptr, _) = pointer::from_slice("❤️🦅".as_bytes())?;
         let cutoff = get_rune_cutoff_at_index(ptr, 10, 4);
 
         assert!(cutoff.is_err());
@@ -385,8 +444,7 @@ mod test_get_rune_cutoff_at_index {
         // "🔥" => length=4 => [0xf0, 0x9f, 0x94, 0xa5] => [0b11110000, 0b10011111, 0b10010100, 0b10100101] => [240, 159, 148, 165]
         // "❤️‍🔥" => length=13 => [0xe2, 0x9d, 0xa4, 0xef, 0xb8, 0x8f, 0xe2, 0x80, 0x8d, 0xf0, 0x9f, 0x94, 0xa5] => [0b11100010, 0b10011101, 0b10100100, 0b11101111, 0b10111000, 0b10001111, 0b11100010, 0b10000000, 0b10001101, 0b11110000, 0b10011111, 0b10010100, 0b10100101] => [226, 157, 164, 239, 184, 143, 226, 128, 141, 240, 159, 148, 165]
         // "❤️‍🩹" => length=13 => [0xe2, 0x9d, 0xa4, 0xef, 0xb8, 0x8f, 0xe2, 0x80, 0x8d, 0xf0, 0x9f, 0xa9, 0xb9] => [0b11100010, 0b10011101, 0b10100100, 0b11101111, 0b10111000, 0b10001111, 0b11100010, 0b10000000, 0b10001101, 0b11110000, 0b10011111, 0b10101001, 0b10111001] => [226, 157, 164, 239, 184, 143, 226, 128, 141, 240, 159, 169, 185]
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹".as_bytes());
+        let (ptr, length) = pointer::from_slice("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹".as_bytes())?;
         assert_get_rune_cutoff_at_index!(ptr, length, 94, 0, 15, "👩🏻‍🚒");
         assert_get_rune_cutoff_at_index!(ptr, length, 94, 15, 23, "👌🏿");
         assert_get_rune_cutoff_at_index!(ptr, length, 94, 23, 38, "🧑🏽‍🚒");
@@ -411,13 +469,12 @@ mod test_get_rune_cutoff_at_index {
         $expected:literal
         $(,)?
     ) => {{
-        use debug_et_diagnostics::{ansi, fore, from_bytes, indent, step};
-        use utf8_rune::{get_byte_slice_of, format_bytes};
+        use debug_et_diagnostics::{ansi, fore, from_bytes, indent};
+        use crate::{get_byte_slice_of, format_bytes, RuneParts};
 
-        let line = line!() as u8;
-        // step!(fg=line, format!("expecting {} from index..cutoff {}..{}", $expected, $index, $cutoff));
+        // debug_et_diagnostics::step!(fg=line, format!("expecting {} from index..cutoff {}..{}", $expected, $index, $cutoff));
 
-        let slice = utf8_rune::get_byte_slice_of($ptr, 0, $length)
+        let slice = get_byte_slice_of($ptr, 0, $length)
             .iter()
             .map(Clone::clone)
             .map(|c| fore(c.to_string(), from_bytes(&[c]).into()))
@@ -488,10 +545,9 @@ mod test_get_rune_cutoff_at_index {
         let length = $length - index;
         let actual = match RuneParts::from_raw_parts($ptr, $length)
             .rune_at_index($index) {
-                Ok(actual) => actual.as_str()
-            .to_string(),
+                Ok(actual) => actual.as_str().to_string(),
                 Err(error) => {
-                    panic!("{}:{} RuneParts::from_raw_parts({:#?}, {})", file!(), line!(), $ptr, $length);
+                    panic!("{}:{} RuneParts::from_raw_parts({:#?}, {})\n{error}", file!(), line!(), $ptr, $length);
                 }
             };
 
@@ -540,7 +596,7 @@ mod test_get_rune_cutoff_at_index {
 }
 
     fn format_expected_rune(c: &str) -> String {
-        use debug_et_diagnostics::color::{ansi, byte_hex, fore};
+        use debug_et_diagnostics::color::byte_hex;
         format!(
             "\"{c}\" => [{}]",
             c.as_bytes()
@@ -554,17 +610,63 @@ mod test_get_rune_cutoff_at_index {
 }
 
 #[cfg(test)]
+mod test_continuation_bytes_location {
+    use crate::pointer::{self};
+    use crate::{continuation_bytes_location, Result};
+    #[test]
+    fn test_continuation_byte_0x200d() -> Result<()> {
+        let (ptr, length) = pointer::from_display("👩🏻‍🚒")?;
+
+        assert_eq!(
+            "👩🏻‍🚒".as_bytes().to_vec(),
+            vec![
+                0xF0, 0x9F, 0x91, 0xA9, 0xF0, 0x9F, 0x8F, 0xBB, 0xE2, 0x80, 0x8D, 0xF0,
+                0x9F, 0x9A, 0x92
+            ]
+        );
+        let location = continuation_bytes_location(ptr, length, 8);
+
+        assert_eq!(location.is_some(), true);
+        let (count, ty) = location.unwrap();
+        assert_eq!(ty.len(), 4);
+        assert_eq!(ty.byte(), 0xF0);
+        assert_eq!(count, 7);
+
+        Ok(())
+    }
+    #[test]
+    fn test_continuation_byte_0xfe0f() -> Result<()> {
+        let (ptr, length) = pointer::from_display("❤️‍🔥")?;
+        assert_eq!(
+            "❤️‍🔥".as_bytes().to_vec(),
+            vec![
+                0xE2, 0x9D, 0xA4, 0xEF, 0xB8, 0x8F, 0xE2, 0x80, 0x8D, 0xF0, 0x9F, 0x94,
+                0xA5
+            ]
+        );
+        let location = continuation_bytes_location(ptr, length, 3);
+
+        assert_eq!(location.is_some(), true);
+        let (count, ty) = location.unwrap();
+        assert_eq!(ty.len(), 3);
+        assert_eq!(ty.byte(), 0xE2);
+        assert_eq!(count, 10);
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod test_next_valid_cutoff {
-    use debug_et_diagnostics::{dbg_bytes, step};
 
+    use crate::pointer::{self};
     use crate::{
-        get_byte_slice_of, next_valid_cutoff, slice_ptr_and_length_from_bytes, Result,
-        RuneParts,
+        assert_none_next_valid_cutoff, assert_some_next_valid_cutoff,
+        next_valid_cutoff, Result, RuneParts,
     };
-
     #[test]
     fn test_next_valid_cutoff_parts() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("👌👌🏻👌🏼👌🏽👌🏾👌🏿".as_bytes());
+        let (ptr, length) = pointer::from_slice("👌👌🏻👌🏼👌🏽👌🏾👌🏿".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 44, 0, 0, "👌");
         assert_some_next_valid_cutoff!(ptr, length, 44, 1, 4, "👌🏻");
         assert_some_next_valid_cutoff!(ptr, length, 44, 2, 4, "👌🏻");
@@ -621,14 +723,14 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_first_index_single_rune() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 6, 0, 0, "❤️");
         Ok(())
     }
 
     #[test]
     fn test_next_valid_cutoff_empty() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("".as_bytes());
+        let (ptr, length) = pointer::from_slice("".as_bytes())?;
         assert_none_next_valid_cutoff!(ptr, length, 0, 0);
 
         Ok(())
@@ -636,8 +738,7 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_various_indexes_6_bytes() -> Result<()> {
-        // "☠️" => [0xe2, 0x98, 0xa0, 0xef, 0xb8, 0x8f] => [0b11100010, 0b10011000, 0b10100000, 0b11101111, 0b10111000, 0b10001111]
-        let (ptr, length) = slice_ptr_and_length_from_bytes("skull☠️skull".as_bytes());
+        let (ptr, length) = pointer::from_slice("skull☠️skull".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 16, 0, 0, "s");
         assert_some_next_valid_cutoff!(ptr, length, 16, 4, 4, "l");
         assert_some_next_valid_cutoff!(ptr, length, 16, 5, 5, "☠️");
@@ -646,10 +747,7 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_various_indexes_4_bytes() -> Result<()> {
-        //  "😀" => [0xf0, 0x9f, 0x98, 0x80] => [0b11110000, 0b10011111, 0b10011000, 0b10000000]
-
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("smiley😀smiley".as_bytes());
+        let (ptr, length) = pointer::from_slice("smiley😀smiley".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 16, 5, 5, "y");
         assert_some_next_valid_cutoff!(ptr, length, 16, 6, 6, "😀");
         Ok(())
@@ -657,8 +755,7 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_various_indexes_ascii() -> Result<()> {
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("abcdefghijklmnopqrstu".as_bytes());
+        let (ptr, length) = pointer::from_slice("abcdefghijklmnopqrstu".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 21, 7, 7, "h");
 
         Ok(())
@@ -666,10 +763,7 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_various_indexes_non_ascii() -> Result<()> {
-        // "🦅" => length=4 => [0xf0, 0x9f, 0xa6, 0x85] => [0b11110000, 0b10011111, 0b10100110, 0b10000101] => [240, 159, 166, 133]
-        // "ã" => length=2 => [0xc3, 0xa3] => [0b11000011, 0b10100011] => [195, 163]
-
-        let (ptr, length) = slice_ptr_and_length_from_bytes("falcão🦅".as_bytes());
+        let (ptr, length) = pointer::from_slice("falcão🦅".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 11, 4, 4, "ã");
         assert_some_next_valid_cutoff!(ptr, length, 11, 5, 6, "o");
         assert_some_next_valid_cutoff!(ptr, length, 11, 6, 6, "o");
@@ -680,7 +774,7 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_first_index() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️🦅".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️🦅".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 10, 0, 0, "❤️");
         assert_some_next_valid_cutoff!(ptr, length, 10, 1, 6, "🦅");
         assert_some_next_valid_cutoff!(ptr, length, 10, 2, 6, "🦅");
@@ -695,8 +789,7 @@ mod test_next_valid_cutoff {
 
     #[test]
     fn test_next_valid_cutoff_at_various_indexes_94_bytes() -> Result<()> {
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹".as_bytes());
+        let (ptr, length) = pointer::from_slice("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹".as_bytes())?;
         assert_some_next_valid_cutoff!(ptr, length, 94, 0, 0, "👩🏻‍🚒");
         assert_some_next_valid_cutoff!(ptr, length, 94, 1, 4, "🏻\u{200d}🚒");
         assert_some_next_valid_cutoff!(ptr, length, 94, 2, 4, "🏻\u{200d}🚒");
@@ -800,10 +893,7 @@ mod test_next_valid_cutoff {
         $expected_rune_str:literal
         $(,)?
     ) => {{
-        use debug_et_diagnostics::{ansi, step};
-
-        let line = line!() as u8;
-        // step!(fg=line, format!("expecting next_valid_cutoff from invalid index {} to be {} matching rune \"{}\"", $invalid_index, $expected_valid_index, $expected_rune_str));
+        // debug_et_diagnostics::step!(fg=line, format!("expecting next_valid_cutoff from invalid index {} to be {} matching rune \"{}\"", $invalid_index, $expected_valid_index, $expected_rune_str));
 
         assert_eq!($length, $expected_length, "expected length to be {} rather than {}", $expected_length, $length);
         let result = next_valid_cutoff($ptr, $length, $invalid_index);
@@ -828,17 +918,7 @@ mod test_next_valid_cutoff {
             $expected_length:literal,
             $invalid_index:literal $(,)?
         ) => {{
-            use debug_et_diagnostics::{ansi, step};
-
-            let line = line!() as u8;
-            // step!(
-            //     fg = line,
-            //     format!(
-            //         "expecting next_valid_cutoff from invalid index {} to be None",
-            //         $invalid_index
-            //     )
-            // );
-
+            // debug_et_diagnostics::step!(fg = (line!() as u8),format!("expecting next_valid_cutoff from invalid index {} to be None",$invalid_index));
             assert_eq!(
                 $length, $expected_length,
                 "expected length to be {} rather than {}",
@@ -857,16 +937,15 @@ mod test_next_valid_cutoff {
 
 #[cfg(test)]
 mod test_previous_valid_cutoff {
-    use debug_et_diagnostics::{dbg_bytes, step};
-
+    use crate::pointer::{self};
     use crate::{
-        get_byte_slice_of, previous_valid_cutoff, slice_ptr_and_length_from_bytes,
-        Result, RuneParts,
+        assert_none_previous_valid_cutoff, assert_some_previous_valid_cutoff,
+        previous_valid_cutoff, Result, RuneParts,
     };
 
     #[test]
     fn test_previous_valid_cutoff_parts() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("👌👌🏻👌🏼👌🏽👌🏾👌🏿".as_bytes());
+        let (ptr, length) = pointer::from_slice("👌👌🏻👌🏼👌🏽👌🏾👌🏿".as_bytes())?;
         assert_some_previous_valid_cutoff!(ptr, length, 44, 0, 0, "👌");
         assert_some_previous_valid_cutoff!(ptr, length, 44, 1, 0, "👌");
         assert_some_previous_valid_cutoff!(ptr, length, 44, 5, 4, "👌🏻");
@@ -878,14 +957,14 @@ mod test_previous_valid_cutoff {
     }
     #[test]
     fn test_previous_valid_cutoff_at_first_index_single_rune() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️".as_bytes());
+        let (ptr, length) = pointer::from_slice("❤️".as_bytes())?;
         assert_some_previous_valid_cutoff!(ptr, length, 6, 0, 0, "❤️");
         Ok(())
     }
 
     #[test]
     fn test_previous_valid_cutoff_empty() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("".as_bytes());
+        let (ptr, length) = pointer::from_slice("".as_bytes())?;
         assert_none_previous_valid_cutoff!(ptr, length, 0, 0);
 
         Ok(())
@@ -893,8 +972,7 @@ mod test_previous_valid_cutoff {
 
     #[test]
     fn test_previous_valid_cutoff_at_various_indexes_6_bytes() -> Result<()> {
-        // "☠️" => [0xe2, 0x98, 0xa0, 0xef, 0xb8, 0x8f] => [0b11100010, 0b10011000, 0b10100000, 0b11101111, 0b10111000, 0b10001111]
-        let (ptr, length) = slice_ptr_and_length_from_bytes("skull☠️skull".as_bytes());
+        let (ptr, length) = pointer::from_slice("skull☠️skull".as_bytes())?;
         assert_none_previous_valid_cutoff!(ptr, length, 16, 0);
         assert_none_previous_valid_cutoff!(ptr, length, 16, 1);
         assert_none_previous_valid_cutoff!(ptr, length, 16, 2);
@@ -911,17 +989,13 @@ mod test_previous_valid_cutoff {
         assert_some_previous_valid_cutoff!(ptr, length, 16, 13, 5, "☠️");
         assert_some_previous_valid_cutoff!(ptr, length, 16, 14, 5, "☠️");
         assert_some_previous_valid_cutoff!(ptr, length, 16, 15, 5, "☠️");
-        // assert_none_previous_valid_cutoff!(ptr, length, 16, 16);
         assert_some_previous_valid_cutoff!(ptr, length, 16, 16, 5, "☠️");
         Ok(())
     }
 
     #[test]
     fn test_previous_valid_cutoff_at_various_indexes_4_bytes() -> Result<()> {
-        //  "😀" => [0xf0, 0x9f, 0x98, 0x80] => [0b11110000, 0b10011111, 0b10011000, 0b10000000]
-
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("smiley😀smiley".as_bytes());
+        let (ptr, length) = pointer::from_slice("smiley😀smiley".as_bytes())?;
         assert_none_previous_valid_cutoff!(ptr, length, 16, 0);
         assert_none_previous_valid_cutoff!(ptr, length, 16, 1);
         assert_none_previous_valid_cutoff!(ptr, length, 16, 2);
@@ -939,14 +1013,12 @@ mod test_previous_valid_cutoff {
         assert_some_previous_valid_cutoff!(ptr, length, 16, 14, 6, "😀");
         assert_some_previous_valid_cutoff!(ptr, length, 16, 15, 6, "😀");
         assert_some_previous_valid_cutoff!(ptr, length, 16, 16, 6, "😀");
-        // assert_none_previous_valid_cutoff!(ptr, length, 16, 16);
         Ok(())
     }
 
     #[test]
     fn test_previous_valid_cutoff_at_various_indexes_ascii() -> Result<()> {
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("abcdefghijklmnopqrstu".as_bytes());
+        let (ptr, length) = pointer::from_slice("abcdefghijklmnopqrstu".as_bytes())?;
         assert_none_previous_valid_cutoff!(ptr, length, 21, 7);
 
         Ok(())
@@ -954,10 +1026,7 @@ mod test_previous_valid_cutoff {
 
     #[test]
     fn test_previous_valid_cutoff_at_various_indexes_non_ascii() -> Result<()> {
-        // "🦅" => length=4 => [0xf0, 0x9f, 0xa6, 0x85] => [0b11110000, 0b10011111, 0b10100110, 0b10000101] => [240, 159, 166, 133]
-        // "ã" => length=2 => [0xc3, 0xa3] => [0b11000011, 0b10100011] => [195, 163]
-
-        let (ptr, length) = slice_ptr_and_length_from_bytes("falcão🦅".as_bytes());
+        let (ptr, length) = pointer::from_slice("falcão🦅".as_bytes())?;
         assert_some_previous_valid_cutoff!(ptr, length, 11, 4, 4, "ã");
         assert_some_previous_valid_cutoff!(ptr, length, 11, 5, 4, "ã");
         assert_some_previous_valid_cutoff!(ptr, length, 11, 6, 4, "ã");
@@ -975,7 +1044,7 @@ mod test_previous_valid_cutoff {
 
     #[test]
     fn test_previous_valid_cutoff_at_first_index() -> Result<()> {
-        let (ptr, length) = slice_ptr_and_length_from_bytes("❤️🦅".as_bytes());
+        let (ptr, length) = pointer::from_display("❤️🦅")?;
         assert_some_previous_valid_cutoff!(ptr, length, 10, 0, 0, "❤️");
         assert_some_previous_valid_cutoff!(ptr, length, 10, 1, 0, "❤️");
         assert_some_previous_valid_cutoff!(ptr, length, 10, 2, 0, "❤️");
@@ -997,8 +1066,7 @@ mod test_previous_valid_cutoff {
 
     #[test]
     fn test_previous_valid_cutoff_at_various_indexes_94_bytes() -> Result<()> {
-        let (ptr, length) =
-            slice_ptr_and_length_from_bytes("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹".as_bytes());
+        let (ptr, length) = pointer::from_display("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹")?;
         assert_some_previous_valid_cutoff!(ptr, length, 94, 0, 0, "👩🏻‍🚒");
         assert_some_previous_valid_cutoff!(ptr, length, 94, 1, 0, "👩🏻‍🚒");
         assert_some_previous_valid_cutoff!(ptr, length, 94, 2, 0, "👩🏻‍🚒");
@@ -1111,10 +1179,9 @@ mod test_previous_valid_cutoff {
         $expected_rune_str:literal
         $(,)?
     ) => {{
-        use debug_et_diagnostics::{ansi, step};
 
-        let line = line!() as u8;
-        // step!(fg=line, format!("expecting previous_valid_cutoff from invalid index {} to be {} matching rune \"{}\"", $invalid_index, $expected_valid_index, $expected_rune_str));
+
+        // debug_et_diagnostics::step!(fg=(line!() as u8), format!("expecting previous_valid_cutoff from invalid index {} to be {} matching rune \"{}\"", $invalid_index, $expected_valid_index, $expected_rune_str));
 
         assert_eq!($length, $expected_length, "expected length to be {} rather than {}", $expected_length, $length);
         let result = previous_valid_cutoff($ptr, $length, $invalid_index);
@@ -1136,16 +1203,9 @@ mod test_previous_valid_cutoff {
     (
         $ptr:expr, $length:expr, $expected_length:literal, $invalid_index:literal $(,)?
     ) => {{
-        use debug_et_diagnostics::{ansi, step};
 
-        let line = line!() as u8;
-        // step!(
-        //     fg = line,
-        //     format!(
-        //         "expecting previous_valid_cutoff from invalid index {} to be None",
-        //         $invalid_index
-        //     )
-        // );
+
+        // debug_et_diagnostics::step!(fg = (line!() as u8),format!("expecting previous_valid_cutoff from invalid index {} to be None",$invalid_index));
 
         assert_eq!(
             $length, $expected_length,

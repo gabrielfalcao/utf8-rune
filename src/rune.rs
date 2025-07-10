@@ -3,10 +3,12 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
+use crate::pointer::{
+    self, get_byte_slice_of,
+};
 use crate::{
-    dealloc_ptr, display_error, format_bytes, get_byte_slice_of,
-    get_rune_cutoff_at_index, new_ptr, slice_ptr_and_length_from_display,
-    unwrap_indent, Result, DEFAULT_INDENT,
+    display_error, format_bytes, get_rune_cutoff_at_index, unwrap_indent, Result,
+    DEFAULT_INDENT,
 };
 
 /// A Rune represents a single visible UTF-8 character. To handle contiguous bytes as multiple runes consider using [Runes](crate::Runes)
@@ -37,30 +39,40 @@ pub struct Rune {
 
 impl Default for Rune {
     fn default() -> Rune {
-        let (ptr, length) = slice_ptr_and_length_from_display("");
-        Rune { ptr, length }
+        Rune::empty().expect("memory allocation")
     }
 }
 impl Rune {
     pub fn new<T: Display>(input: T) -> Rune {
-        let (input_ptr, input_length) = slice_ptr_and_length_from_display(input);
+        Rune::allocate(&input)
+            .expect(format!("allocate memory for Rune from {input}").as_str())
+    }
+
+    pub fn allocate<T: Display>(input: T) -> Result<Rune> {
+        let (input_ptr, input_length) = pointer::from_display(input)?;
         match get_rune_cutoff_at_index(input_ptr, input_length, 0) {
             Ok(length) => {
-                let ptr = new_ptr(length);
+                let ptr = pointer::create(length)?;
                 for offset in 0..length {
                     unsafe {
                         ptr.add(offset)
                             .write(input_ptr.add(offset).read());
                     }
                 }
-                dealloc_ptr(input_ptr, input_length);
-                Rune { ptr, length }
+                pointer::destroy(input_ptr, input_length)?;
+                Ok(Rune { ptr, length })
             },
             Err(error) => {
                 display_error(error, input_ptr, input_length);
-                Rune::default()
+                Ok(Rune::default())
             },
         }
+    }
+
+    pub fn empty() -> Result<Rune> {
+        let length = 0;
+        let ptr = pointer::create(length)?;
+        Ok(Rune { ptr, length })
     }
 
     pub fn from_ptr_cutoff(
@@ -70,7 +82,7 @@ impl Rune {
     ) -> Result<Rune> {
         let cutoff = get_rune_cutoff_at_index(input_ptr, input_length, index)?;
         let length = cutoff - index;
-        let ptr = new_ptr(length);
+        let ptr = pointer::create(length)?;
 
         for (index, byte) in get_byte_slice_of(input_ptr, index, length)
             .into_iter()
@@ -150,7 +162,7 @@ impl Deref for Rune {
 
 // impl Drop for Rune {
 //     fn drop(&mut self) {
-//         dealloc_ptr(self.ptr, self.length)
+//         pointer::destroy(self.ptr, self.length)
 //     }
 // }
 
@@ -220,5 +232,83 @@ impl Ord for Rune {
 impl Hash for Rune {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_bytes().hash(state);
+    }
+}
+
+
+#[cfg(test)]
+mod test_rune {
+    use crate::Rune;
+
+    #[test]
+    fn test_single_rune() {
+        let rune = Rune::new("❤️");
+        assert_eq!(rune.len(), 6);
+        assert_eq!(rune.as_str(), "❤️");
+        assert_eq!(rune.as_bytes(), "❤️".as_bytes());
+
+        let rune = Rune::new("👌");
+        assert_eq!(rune.len(), 4);
+        assert_eq!(rune.as_str(), "👌");
+        assert_eq!(rune.as_bytes(), "👌".as_bytes());
+
+        let rune = Rune::new("👌🏻");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏻");
+        assert_eq!(rune.as_bytes(), "👌🏻".as_bytes());
+
+        let rune = Rune::new("👌🏼");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏼");
+        assert_eq!(rune.as_bytes(), "👌🏼".as_bytes());
+
+        let rune = Rune::new("👌🏽");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏽");
+        assert_eq!(rune.as_bytes(), "👌🏽".as_bytes());
+
+        let rune = Rune::new("👌🏾");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏾");
+        assert_eq!(rune.as_bytes(), "👌🏾".as_bytes());
+
+        let rune = Rune::new("👌🏿");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏿");
+        assert_eq!(rune.as_bytes(), "👌🏿".as_bytes());
+    }
+
+    #[test]
+    fn test_from_multiple_runes() {
+        let rune = Rune::new("👌👌🏻👌🏼👌🏽👌🏾👌🏿");
+        assert_eq!(rune.len(), 4);
+        assert_eq!(rune.as_str(), "👌");
+        assert_eq!(rune.as_bytes(), "👌".as_bytes());
+
+        let rune = Rune::new("👌🏻👌🏼👌🏽👌🏾👌🏿");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏻");
+        assert_eq!(rune.as_bytes(), "👌🏻".as_bytes());
+
+        let rune = Rune::new("👌🏼👌🏽👌🏾👌🏿");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏼");
+        assert_eq!(rune.as_bytes(), "👌🏼".as_bytes());
+
+        let rune = Rune::new("👌🏽👌🏾👌🏿");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏽");
+        assert_eq!(rune.as_bytes(), "👌🏽".as_bytes());
+
+        let rune = Rune::new("👌🏾👌🏿");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏾");
+        assert_eq!(rune.as_bytes(), "👌🏾".as_bytes());
+
+        let rune = Rune::new("👌🏿");
+        assert_eq!(rune.len(), 8);
+        assert_eq!(rune.as_str(), "👌🏿");
+        assert_eq!(rune.as_bytes(), "👌🏿".as_bytes());
     }
 }

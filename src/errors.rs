@@ -1,8 +1,11 @@
+use crate::mem::MemoryError;
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum Error<'g> {
     InvalidIndex(usize, &'g [u8]),
     UnexpectedContinuationByte(u8, usize, Option<usize>, Option<usize>, &'g [u8]),
     Utf8Error(usize, &'g [u8], String),
+    MemoryError(MemoryError),
 }
 impl<'g> Error<'g> {
     pub fn previous_valid_cutoff(&self) -> Option<usize> {
@@ -10,6 +13,7 @@ impl<'g> Error<'g> {
             Error::InvalidIndex(_, _) => None,
             Error::UnexpectedContinuationByte(_, _, previous, _, _) => previous.clone(),
             Error::Utf8Error(_, _, _) => None,
+            Error::MemoryError(_) => None,
         }
     }
 
@@ -18,26 +22,33 @@ impl<'g> Error<'g> {
             Error::InvalidIndex(_, _) => None,
             Error::UnexpectedContinuationByte(_, _, _, next, _) => next.clone(),
             Error::Utf8Error(_, _, _) => None,
+            Error::MemoryError(_) => None,
         }
     }
 }
 impl<'g> std::fmt::Display for Error<'g> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         fn format_slice(slice: &[u8], index: usize) -> String {
-            format!(
-                "[{}]",
-                slice
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i,byte)| if i == index {
-                        format!("\x1b[1;38;5;220m0x{byte:02x}\x1b[0m")
-                    } else {
-                        format!("0x{byte:02x}")
-
-                    })
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
+            [
+                format!(
+                    "[{}]",
+                    slice
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, byte)| if i == index {
+                            format!("\x1b[1;38;5;220m0x{byte:02x}\x1b[0m")
+                        } else {
+                            format!("0x{byte:02x}")
+                        })
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ),
+                String::from_utf8(slice.to_vec()).unwrap_or_default(),
+            ]
+            .into_iter()
+            .filter(|c| !c.is_empty())
+            .collect::<Vec<String>>()
+            .join(" => ")
         }
         write!(
             f,
@@ -55,6 +66,9 @@ impl<'g> std::fmt::Display for Error<'g> {
                         "Utf8Error in index {index} of {}: {error}",
                         format_slice(slice, *index)
                     )
+                },
+                Error::MemoryError(error) => {
+                    format!("{:#?}", error)
                 },
                 Error::UnexpectedContinuationByte(
                     byte,
@@ -81,4 +95,9 @@ impl<'g> std::fmt::Debug for Error<'g> {
     }
 }
 impl<'g> std::error::Error for Error<'g> {}
+impl<'g> From<MemoryError> for Error<'g> {
+    fn from(e: MemoryError) -> Error<'g> {
+        Error::MemoryError(e)
+    }
+}
 pub type Result<T> = std::result::Result<T, Error<'static>>;

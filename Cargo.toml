@@ -26,16 +26,15 @@ license = "MIT"
 keywords = ["utf8", "unicode", "streamer"]
 authors = ["Gabriel DeMoura <gabrielteratos@gmail.com>"]
 categories = ["internationalization", "localization", "parsing"]
-# autotests = false
 
 [dev-dependencies]
 debug-et-diagnostics = { version = "0.1.2" }
 
 
 [features]
+pointer = []
 debug = []
 
 [lib]
 name = "utf8_rune"
 path = "./src/lib.rs"
-test = false

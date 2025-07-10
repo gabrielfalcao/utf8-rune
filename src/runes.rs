@@ -2,10 +2,10 @@ use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use crate::{
-    get_rune_cutoff_at_index, get_valid_utf8_str_of, slice_ptr_and_length_from_display,
-    unwrap_indent, Result, Rune,
+use crate::pointer::{
+    self, get_valid_utf8_str_of,
 };
+use crate::{get_rune_cutoff_at_index, unwrap_indent, Result, Rune};
 
 /// Represents a slice of bytes which can be automatically parsed into
 /// a sequence of [Rune(s)](crate::Rune)
@@ -38,14 +38,24 @@ use crate::{
 #[derive(Clone)]
 pub struct Runes<'g> {
     pub(crate) ptr: *const u8,
-    pub(crate) indexes: Vec<usize>,
+    pub(crate) indexes: &'g [usize],
     pub(crate) length: usize,
     pub(crate) _marker: PhantomData<&'g usize>,
 }
+impl<'g> Default for Runes<'g> {
+    fn default() -> Runes<'g> {
+        Runes::empty().expect("memory allocation")
+    }
+}
 impl<'g> Runes<'g> {
     pub fn new<T: Display>(input: T) -> Runes<'g> {
+        Runes::allocate(&input)
+            .expect(format!("allocate memory for Runes from {input}").as_str())
+    }
+
+    pub fn allocate<T: Display>(input: T) -> Result<Runes<'g>> {
         let input = input.to_string();
-        let (ptr, length) = slice_ptr_and_length_from_display(&input);
+        let (ptr, length) = pointer::from_display(&input)?;
         let mut cutoff: usize = 0;
         let mut indexes = vec![cutoff];
         while cutoff < length {
@@ -57,13 +67,23 @@ impl<'g> Runes<'g> {
                 Err(_) => break,
             }
         }
-
-        Runes {
+        Ok(Runes {
             ptr,
-            indexes,
+            indexes: indexes.leak(),
             length,
             _marker: PhantomData,
-        }
+        })
+    }
+
+    pub fn empty() -> Result<Runes<'g>> {
+        let length = 0;
+        let ptr = pointer::create(length)?;
+        Ok(Runes {
+            ptr,
+            length,
+            indexes: &[],
+            _marker: PhantomData,
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -111,7 +131,7 @@ impl<'g> Runes<'g> {
     }
 
     pub fn indexes(&self) -> Vec<usize> {
-        let mut indexes = self.indexes.clone();
+        let mut indexes = self.indexes.to_vec();
         if indexes.len() > 0 {
             indexes.pop();
         }
@@ -183,5 +203,35 @@ impl<'g> Deref for Runes<'g> {
             .map(|c| c.unwrap())
             .collect::<Vec<&'g str>>();
         unsafe { std::mem::transmute::<&[&str], &'g [&'g str]>(&runes) }
+    }
+}
+
+#[cfg(test)]
+mod test_runes {
+    use crate::{Result, Runes};
+
+    #[test]
+    fn test_runes() -> Result<()> {
+        let parts = Runes::new("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹");
+        assert_eq!(
+            parts
+                .runes()?
+                .iter()
+                .map(|rune| rune.to_string())
+                .collect::<Vec<String>>(),
+            vec![
+                "👩🏻‍🚒",
+                "👌🏿",
+                "🧑🏽‍🚒",
+                "👨‍🚒",
+                "🌶️",
+                "🎹",
+                "💔",
+                "🔥",
+                "❤️‍🔥",
+                "❤️‍🩹",
+            ]
+        );
+        Ok(())
     }
 }
