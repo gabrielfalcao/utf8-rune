@@ -1,6 +1,6 @@
 [package]
 name = "utf8-rune"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 
 description = """Lightweight crate that aims at being a building block
