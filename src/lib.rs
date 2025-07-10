@@ -1,16 +1,16 @@
-pub mod errors;
+mod errors;
 #[doc(inline)]
 pub use errors::{Error, Result};
 
-pub mod byte_type;
+mod byte_type;
 #[doc(inline)]
 pub use byte_type::ByteType;
 
-pub mod rune;
+mod rune;
 #[doc(inline)]
 pub use rune::Rune;
 
-pub mod runes;
+mod runes;
 #[doc(inline)]
 pub use runes::Runes;
 
@@ -31,17 +31,19 @@ pub(crate) use pointer::{
 pub mod internal;
 pub(crate) use internal::{display_error, format_bytes, unwrap_indent, DEFAULT_INDENT};
 
-pub mod parts;
+mod parts;
 #[doc(inline)]
 pub use parts::RuneParts;
 
-pub mod heuristic;
+mod heuristic;
 #[doc(inline)]
 pub use heuristic::{
-    continuation_bytes_location, get_rune_cutoff_at_index, next_valid_cutoff,
-    previous_valid_cutoff, split_at_first_rune,
+    continuation_bytes_location, get_rune_cutoff_at_index, split_at_first_rune,
 };
 
+#[cfg(not(feature = "pointer"))]
+pub(crate) mod mem;
+#[cfg(feature = "pointer")]
 pub mod mem;
 #[cfg(not(feature = "pointer"))]
 pub(crate) use mem::layout;

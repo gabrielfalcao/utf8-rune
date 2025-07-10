@@ -1,23 +1,21 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-use std::ops::Deref;
+use std::ops::Index;
 
-use crate::pointer::{
-    self, get_valid_utf8_str_of,
-};
+use crate::pointer;
 use crate::{get_rune_cutoff_at_index, unwrap_indent, Result, Rune};
 
 /// Represents a slice of bytes which can be automatically parsed into
 /// a sequence of [Rune(s)](crate::Rune)
 ///
-/// Example
+/// # Examples
 ///
 ///```
-/// use utf8_rune::{Runes};
+/// use utf8_rune::Runes;
 /// let parts = Runes::new("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹");
 /// assert_eq!(
 ///     parts
-///         .runes().unwrap_or_default()
+///         .to_vec()
 ///         .iter()
 ///         .map(|rune| rune.to_string())
 ///         .collect::<Vec<String>>(),
@@ -35,6 +33,28 @@ use crate::{get_rune_cutoff_at_index, unwrap_indent, Result, Rune};
 ///     ]
 /// );
 ///```
+///
+/// ```
+/// use utf8_rune::Runes;
+/// let runes = Runes::new("👌👌🏻👌🏼👌🏽👌🏾👌🏿");
+///
+/// assert_eq!(runes.rune_indexes(), vec![
+///     (0, 4),
+///     (4, 8),
+///     (12, 8),
+///     (20, 8),
+///     (28, 8),
+///     (36, 8),
+/// ]);
+/// assert_eq!(runes.len(), 6);
+/// assert_eq!(runes[0], "👌");
+/// assert_eq!(runes[1], "👌🏻");
+/// assert_eq!(runes[2], "👌🏼");
+/// assert_eq!(runes[3], "👌🏽");
+/// assert_eq!(runes[4], "👌🏾");
+/// assert_eq!(runes[5], "👌🏿");
+/// ```
+
 #[derive(Clone)]
 pub struct Runes<'g> {
     pub(crate) ptr: *const u8,
@@ -86,10 +106,6 @@ impl<'g> Runes<'g> {
         })
     }
 
-    pub fn len(&self) -> usize {
-        self.indexes.len()
-    }
-
     pub fn as_str(&self) -> &'g str {
         let mut offset = self.length;
         loop {
@@ -112,6 +128,10 @@ impl<'g> Runes<'g> {
 
     pub fn is_empty(&self) -> bool {
         self.length == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.indexes.len() -1
     }
 
     pub fn as_debug(&self, indent: Option<usize>) -> String {
@@ -138,7 +158,7 @@ impl<'g> Runes<'g> {
         indexes
     }
 
-    pub fn slice_indexes(&self) -> Vec<(usize, usize)> {
+    pub fn rune_indexes(&self) -> Vec<(usize, usize)> {
         self.indexes()
             .into_iter()
             .map(|index| {
@@ -155,12 +175,22 @@ impl<'g> Runes<'g> {
             .collect()
     }
 
-    pub fn runes(&self) -> Result<Vec<Rune>> {
-        let mut runes = Vec::<Rune>::new();
-        for cutoff in self.indexes().into_iter() {
-            runes.push(Rune::from_ptr_cutoff(self.ptr, self.length, cutoff)?);
+    pub fn get(&self, index: usize) -> Option<Rune> {
+        let indexes = self.rune_indexes();
+        if index >= indexes.len() {
+            None
+        } else {
+            let (index, length) = indexes[index];
+            Some(Rune::from_raw_parts(unsafe { self.ptr.add(index) }, length))
         }
-        Ok(runes)
+    }
+
+    pub fn to_vec(&self) -> Vec<Rune> {
+        let mut runes = Vec::<Rune>::new();
+        for (index, length) in self.rune_indexes().into_iter() {
+            runes.push(Rune::from_raw_parts(unsafe { self.ptr.add(index) }, length));
+        }
+        runes
     }
 }
 impl<'g> From<&str> for Runes<'g> {
@@ -191,18 +221,15 @@ impl<'g> Debug for Runes<'g> {
         write!(f, "{}", self.as_debug(None))
     }
 }
-impl<'g> Deref for Runes<'g> {
-    type Target = [&'g str];
+impl<'g> Index<usize> for Runes<'g> {
+    type Output = &'g str;
 
-    fn deref(&self) -> &[&'g str] {
-        let runes = self
-            .slice_indexes()
-            .into_iter()
-            .map(|(index, count)| get_valid_utf8_str_of(self.ptr, index, count))
-            .filter(|c| c.is_some())
-            .map(|c| c.unwrap())
-            .collect::<Vec<&'g str>>();
-        unsafe { std::mem::transmute::<&[&str], &'g [&'g str]>(&runes) }
+    fn index(&self, index: usize) -> &&'g str {
+        if let Some(rune) = self.get(index) {
+            unsafe { std::mem::transmute::<&&str, &&'g str>(&rune.as_str()) }
+        } else {
+            &""
+        }
     }
 }
 
@@ -211,11 +238,11 @@ mod test_runes {
     use crate::{Result, Runes};
 
     #[test]
-    fn test_runes() -> Result<()> {
+    fn test_to_vec() -> Result<()> {
         let parts = Runes::new("👩🏻‍🚒👌🏿🧑🏽‍🚒👨‍🚒🌶️🎹💔🔥❤️‍🔥❤️‍🩹");
         assert_eq!(
             parts
-                .runes()?
+                .to_vec()
                 .iter()
                 .map(|rune| rune.to_string())
                 .collect::<Vec<String>>(),
@@ -232,6 +259,32 @@ mod test_runes {
                 "❤️‍🩹",
             ]
         );
+        Ok(())
+    }
+    #[test]
+    fn test_length() -> Result<()> {
+        let runes = Runes::new("👌👌🏻👌🏼👌🏽👌🏾👌🏿");
+        let vec = runes.to_vec();
+
+        assert_eq!(vec.len(), 6);
+        assert_eq!(
+            runes.rune_indexes(),
+            vec![
+                (0, 4),
+                (4, 8),
+                (12, 8),
+                (20, 8),
+                (28, 8),
+                (36, 8),
+            ]
+        );
+        assert_eq!(runes[0], "👌");
+        assert_eq!(runes[1], "👌🏻");
+        assert_eq!(runes[2], "👌🏼");
+        assert_eq!(runes[3], "👌🏽");
+        assert_eq!(runes[4], "👌🏾");
+        assert_eq!(runes[5], "👌🏿");
+
         Ok(())
     }
 }

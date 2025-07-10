@@ -7,7 +7,7 @@ use crate::{ByteType, Error, Result};
 /// heuristic function that determines the cutoff index at which a
 /// "[rune](crate::Rune)" ends after the given index.
 ///
-/// Example
+/// # Example
 ///
 /// > Note: `utf8_rune::mem` requires the `mem` feature.
 ///
@@ -25,7 +25,6 @@ use crate::{ByteType, Error, Result};
 /// let slice = get_byte_slice_of(ptr, index, count);
 /// assert_eq!(slice, "🎹".as_bytes());
 /// ```
-///
 #[inline]
 pub fn get_rune_cutoff_at_index<'g>(
     ptr: *const u8,
@@ -119,11 +118,58 @@ pub fn get_rune_cutoff_at_index<'g>(
     }
     return Ok(cutoff);
 }
+/// equivalent to calling [`get_rune_cutoff_at_index`] with index 0
+///
+/// # Example
+///
+/// ```
+/// use utf8_rune::split_at_first_rune;
+/// let bytes = "☠️skull".as_bytes();
+/// let length = bytes.len();
+/// let ptr = bytes.as_ptr();
+/// assert_eq!(split_at_first_rune(ptr, length), 6);
+/// assert_eq!(std::str::from_utf8(&bytes[0..6]), Ok("☠️"));
+/// ```
 #[inline]
 pub fn split_at_first_rune<'g>(ptr: *const u8, length: usize) -> usize {
     get_rune_cutoff_at_index(ptr, length, 0).expect("should not fail at index 0")
 }
 
+/// returns the byte count until the end of that sequence the
+/// [ByteType](crate::ByteType) corresponding to the first byte
+/// pointed at by index when called with index that points to a
+/// sequence of bytes equivalent to either `U+200D` or `U+FE0F`.
+///
+/// # Example
+///
+/// ```
+/// use utf8_rune::continuation_bytes_location;
+///
+/// let bytes = "👩🏻‍🚒".as_bytes();
+/// let index = 8;
+/// let length = bytes.len();
+/// let ptr = bytes.as_ptr();
+/// let (count, ty) = continuation_bytes_location(ptr, length, index).unwrap();
+/// assert_eq!(count, 7);
+/// assert_eq!(&bytes[index..(index+count)], &[0xE2, 0x80, 0x8D, 0xF0, 0x9F, 0x9A, 0x92]);
+/// assert_eq!(std::str::from_utf8(&bytes[index..(index+count)]), Ok("\u{200d}🚒"));
+/// ```
+///
+/// ```
+/// use utf8_rune::continuation_bytes_location;
+///
+/// let bytes = "❤️‍🔥".as_bytes();
+/// let index = 3;
+/// let length = bytes.len();
+/// let ptr = bytes.as_ptr();
+/// let (count, ty) = continuation_bytes_location(ptr, length, index).unwrap();
+/// assert_eq!(count, 10);
+/// assert_eq!(&bytes[index..(index+count)], &[0xEF, 0xB8, 0x8F, 0xE2, 0x80, 0x8D,
+///     0xF0, 0x9F, 0x94, 0xA5
+/// ]);
+/// assert_eq!(std::str::from_utf8(&bytes[index..(index+count)]), Ok("\u{fe0f}\u{200d}🔥"));
+/// ```
+///
 #[inline]
 pub fn continuation_bytes_location<'g>(
     ptr: *const u8,
@@ -165,7 +211,7 @@ pub fn continuation_bytes_location<'g>(
 }
 
 #[inline]
-pub fn previous_valid_cutoff<'e>(
+pub(crate) fn previous_valid_cutoff<'e>(
     ptr: *const u8,
     length: usize,
     index: usize,
@@ -230,7 +276,7 @@ pub fn previous_valid_cutoff<'e>(
 }
 
 #[inline]
-pub fn next_valid_cutoff<'e>(
+pub(crate) fn next_valid_cutoff<'e>(
     ptr: *const u8,
     length: usize,
     index: usize,
@@ -343,7 +389,7 @@ mod test_split_at_first_rune {
     }
 
     #[test]
-    fn test_split_at_first_rune_two_runes() -> Result<()> {
+    fn test_split_at_first_rune_two_to_vec() -> Result<()> {
         let (ptr, length) = pointer::from_slice("❤️🦅".as_bytes())?;
         let cutoff = split_at_first_rune(ptr, length);
         assert_eq!(cutoff, 6);
@@ -659,10 +705,10 @@ mod test_continuation_bytes_location {
 #[cfg(test)]
 mod test_next_valid_cutoff {
 
+    use crate::heuristic::next_valid_cutoff;
     use crate::pointer::{self};
     use crate::{
-        assert_none_next_valid_cutoff, assert_some_next_valid_cutoff,
-        next_valid_cutoff, Result, RuneParts,
+        assert_none_next_valid_cutoff, assert_some_next_valid_cutoff, Result, RuneParts,
     };
     #[test]
     fn test_next_valid_cutoff_parts() -> Result<()> {
@@ -937,10 +983,11 @@ mod test_next_valid_cutoff {
 
 #[cfg(test)]
 mod test_previous_valid_cutoff {
+    use crate::heuristic::previous_valid_cutoff;
     use crate::pointer::{self};
     use crate::{
-        assert_none_previous_valid_cutoff, assert_some_previous_valid_cutoff,
-        previous_valid_cutoff, Result, RuneParts,
+        assert_none_previous_valid_cutoff, assert_some_previous_valid_cutoff, Result,
+        RuneParts,
     };
 
     #[test]

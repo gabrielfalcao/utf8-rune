@@ -1,7 +1,54 @@
 use std::fmt::{Debug, Formatter};
 
-use crate::internal::unwrap_indent;
-
+/// Represents UTF-8 byte type based on the most significant bits
+/// the given byte
+///
+/// Examples
+///
+/// ```
+/// use utf8_rune::ByteType;
+/// let f0 = ByteType::from(0xf0u8);
+/// assert_eq!(f0, ByteType::FourOrMore(0xF0));
+/// assert_eq!(f0.len(), 4);
+/// assert_eq!(f0.is_ascii(), false);
+/// assert_eq!(f0.is_continuation(), false);
+/// ```
+///
+/// ```
+/// use utf8_rune::ByteType;
+/// let e4 = ByteType::from(0xE4u8);
+/// assert_eq!(e4, ByteType::Three(0xE4));
+/// assert_eq!(e4.len(), 3);
+/// assert_eq!(e4.is_ascii(), false);
+/// assert_eq!(e4.is_continuation(), false);
+/// ```
+///
+/// ```
+/// use utf8_rune::ByteType;
+/// let c3 = ByteType::from(0xC3u8);
+/// assert_eq!(c3, ByteType::Two(0xC3));
+/// assert_eq!(c3.len(), 2);
+/// assert_eq!(c3.is_ascii(), false);
+/// assert_eq!(c3.is_continuation(), false);
+/// ```
+///
+/// ```
+/// use utf8_rune::ByteType;
+/// let g = ByteType::from(b'g');
+/// assert_eq!(g, ByteType::Ascii(0x67));
+/// assert_eq!(g.len(), 1);
+/// assert_eq!(g.is_ascii(), true);
+/// assert_eq!(g.is_continuation(), false);
+/// ```
+///
+/// ```
+/// use utf8_rune::ByteType;
+/// let g = ByteType::from(0x80u8);
+/// assert_eq!(g, ByteType::Continuation(0x80));
+/// assert_eq!(g.len(), 1);
+/// assert_eq!(g.is_ascii(), false);
+/// assert_eq!(g.is_continuation(), true);
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ByteType {
     None,
@@ -83,7 +130,7 @@ impl ByteType {
     }
 
     fn as_debug(&self, indent: Option<usize>) -> String {
-        let indent = unwrap_indent(indent);
+        let indent = crate::unwrap_indent(indent);
         format!(
             "{}::{}{{\n{}\n}})",
             "ByteType",

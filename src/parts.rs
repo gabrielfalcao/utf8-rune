@@ -1,19 +1,41 @@
 use std::fmt::{Debug, Display, Formatter};
-
+use std::marker::PhantomData;
 use crate::pointer::{
     self,
 };
 use crate::{
-    display_error, format_bytes, get_rune_cutoff_at_index, unwrap_indent, Result, Rune,
+    display_error, format_bytes, get_rune_cutoff_at_index, unwrap_indent, Result, Rune, Runes,
     DEFAULT_INDENT,
 };
 
+
+///
+/// Represents a memory area with contiguous bytes that serves as
+/// building block for [Runes](crate::Runes) and [Rune](crate::Rune).
+/// # Examples
+///
+///```
+/// use utf8_rune::{RuneParts, Rune, Runes};
+/// let parts = RuneParts::new("👌👌🏻👌🏼👌🏽👌🏾👌🏿");
+/// assert_eq!(parts.len(), 44);
+/// assert_eq!(parts.as_str(), "👌👌🏻👌🏼👌🏽👌🏾👌🏿");
+/// assert_eq!(parts.as_bytes(), "👌👌🏻👌🏼👌🏽👌🏾👌🏿".as_bytes());
+///
+/// let runes = parts.into_runes();
+/// assert_eq!(runes.len(), 6);
+/// assert_eq!(runes[0], "👌");
+/// assert_eq!(runes[1], "👌🏻");
+/// assert_eq!(runes[2], "👌🏼");
+/// assert_eq!(runes[3], "👌🏽");
+/// assert_eq!(runes[4], "👌🏾");
+/// assert_eq!(runes[5], "👌🏿");
+///```
+///
 #[derive(Clone, Copy)]
 pub struct RuneParts {
     pub ptr: *const u8,
     pub length: usize,
 }
-
 impl RuneParts {
     pub fn from_raw_parts(ptr: *const u8, length: usize) -> RuneParts {
         RuneParts { ptr, length }
@@ -22,6 +44,18 @@ impl RuneParts {
     pub fn new<T: Display>(input: T) -> RuneParts {
         RuneParts::allocate(&input)
             .expect(format!("allocate memory for RuneParts from {input}").as_str())
+    }
+
+    pub fn into_runes<'g>(self) -> Runes<'g> {
+        let ptr = self.ptr;
+        let length = self.length;
+        let indexes = self.indexes().leak();
+        Runes {
+            ptr,
+            length,
+            indexes,
+            _marker: PhantomData,
+        }
     }
 
     pub fn allocate<T: Display>(input: T) -> Result<RuneParts> {
@@ -243,7 +277,7 @@ mod test_parts {
         assert_eq!(parts.as_bytes(), "❤️".as_bytes());
     }
     #[test]
-    fn test_new_multiple_runes() {
+    fn test_new_multiple_to_vec() {
         let parts = RuneParts::new("👌👌🏻👌🏼👌🏽👌🏾👌🏿");
         assert_eq!(parts.len(), 44);
         assert_eq!(parts.as_str(), "👌👌🏻👌🏼👌🏽👌🏾👌🏿");

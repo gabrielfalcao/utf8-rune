@@ -3,9 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-use crate::pointer::{
-    self, get_byte_slice_of,
-};
+use crate::pointer::{self, get_byte_slice_of};
 use crate::{
     display_error, format_bytes, get_rune_cutoff_at_index, unwrap_indent, Result,
     DEFAULT_INDENT,
@@ -13,7 +11,7 @@ use crate::{
 
 /// A Rune represents a single visible UTF-8 character. To handle contiguous bytes as multiple runes consider using [Runes](crate::Runes)
 ///
-/// Examples
+/// # Examples
 ///
 ///```
 /// use utf8_rune::Rune;
@@ -30,6 +28,14 @@ use crate::{
 /// assert_eq!(rune.as_str(), "👌🏽");
 /// assert_eq!(rune.as_bytes(), "👌🏽".as_bytes());
 ///```
+///
+///```
+/// use utf8_rune::Rune;
+/// let rune = Rune::new("👩🏻‍🚒");
+/// assert_eq!(rune.len(), 15);
+/// assert_eq!(rune.as_str(), "👩🏻‍🚒");
+/// assert_eq!(rune.as_bytes(), "👩🏻‍🚒".as_bytes());
+///```
 
 #[derive(Clone, Copy)]
 pub struct Rune {
@@ -43,6 +49,10 @@ impl Default for Rune {
     }
 }
 impl Rune {
+    pub fn from_raw_parts(ptr: *const u8, length: usize) -> Rune {
+        Rune { ptr, length }
+    }
+
     pub fn new<T: Display>(input: T) -> Rune {
         Rune::allocate(&input)
             .expect(format!("allocate memory for Rune from {input}").as_str())
@@ -60,7 +70,7 @@ impl Rune {
                     }
                 }
                 pointer::destroy(input_ptr, input_length)?;
-                Ok(Rune { ptr, length })
+                Ok(Rune::from_raw_parts(ptr, length))
             },
             Err(error) => {
                 display_error(error, input_ptr, input_length);
@@ -72,7 +82,7 @@ impl Rune {
     pub fn empty() -> Result<Rune> {
         let length = 0;
         let ptr = pointer::create(length)?;
-        Ok(Rune { ptr, length })
+        Ok(Rune::from_raw_parts(ptr, length))
     }
 
     pub fn from_ptr_cutoff(
@@ -235,7 +245,6 @@ impl Hash for Rune {
     }
 }
 
-
 #[cfg(test)]
 mod test_rune {
     use crate::Rune;
@@ -280,7 +289,7 @@ mod test_rune {
     }
 
     #[test]
-    fn test_from_multiple_runes() {
+    fn test_from_multiple_to_vec() {
         let rune = Rune::new("👌👌🏻👌🏼👌🏽👌🏾👌🏿");
         assert_eq!(rune.len(), 4);
         assert_eq!(rune.as_str(), "👌");
